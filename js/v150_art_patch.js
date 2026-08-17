@@ -54,8 +54,12 @@
     mirror_fan: ['mirrorCoreExtra', 0, 0], core_nexus: ['mirrorCoreExtra', 1, 0]
   };
 
-  RF.CARD_ART = RF.CARD_ART || {};
-  Object.keys(spriteMap).forEach((cardId) => { const cfg = spriteMap[cardId]; if (cfg) RF.CARD_ART[cardId] = SHEETS[cfg[0]]; });
+  // CARD_ART is frozen by the data modules. Build a new lookup instead of
+  // mutating it; in strict mode the old assignment aborted this entire patch.
+  RF.CARD_ART = Object.freeze({
+    ...(RF.CARD_ART || {}),
+    ...Object.fromEntries(Object.entries(spriteMap).map(([cardId, [sheetKey]]) => [cardId, SHEETS[sheetKey]]))
+  });
 
   const imageCache = new Map();
   function getImage(src) {
