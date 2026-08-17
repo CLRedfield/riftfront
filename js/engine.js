@@ -1350,11 +1350,16 @@
       if (x - radius < FIELD.left || x + radius > FIELD.right || y - radius < FIELD.top || y + radius > FIELD.bottom) return true;
       return this.obstacles.some((obstacle) => {
         if (obstacle.shape === 'circle') return Math.hypot(x - Number(obstacle.x), y - Number(obstacle.y)) < Number(obstacle.r || 0) + radius;
-        const left = Number(obstacle.x) - radius;
-        const right = Number(obstacle.x) + Number(obstacle.w || 0) + radius;
-        const top = Number(obstacle.y) - radius;
-        const bottom = Number(obstacle.y) + Number(obstacle.h || 0) + radius;
-        return x > left && x < right && y > top && y < bottom;
+        const width = Number(obstacle.w || 0);
+        const height = Number(obstacle.h || 0);
+        const halfWidth = width * 0.5;
+        const halfHeight = height * 0.5;
+        const corner = clamp(Number(obstacle.radius || 0), 0, Math.min(halfWidth, halfHeight));
+        const qx = Math.abs(x - (Number(obstacle.x) + halfWidth)) - (halfWidth - corner);
+        const qy = Math.abs(y - (Number(obstacle.y) + halfHeight)) - (halfHeight - corner);
+        const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
+        const inside = Math.min(Math.max(qx, qy), 0);
+        return outside + inside - corner < radius;
       });
     }
 
