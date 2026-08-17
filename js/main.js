@@ -205,11 +205,18 @@
       const canvas = document.getElementById('battle-canvas');
       if (!canvas) return { inside: false, x: 0, y: 0 };
       const rect = canvas.getBoundingClientRect();
-      const inside = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+      const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+      const renderWidth = canvas.width * scale;
+      const renderHeight = canvas.height * scale;
+      const offsetX = (rect.width - renderWidth) * 0.5;
+      const offsetY = (rect.height - renderHeight) * 0.5;
+      const localX = clientX - rect.left - offsetX;
+      const localY = clientY - rect.top - offsetY;
+      const inside = localX >= 0 && localX <= renderWidth && localY >= 0 && localY <= renderHeight;
       return {
         inside,
-        x: (clientX - rect.left) * canvas.width / Math.max(1, rect.width),
-        y: (clientY - rect.top) * canvas.height / Math.max(1, rect.height)
+        x: localX / Math.max(0.001, scale),
+        y: localY / Math.max(0.001, scale)
       };
     }
 
@@ -902,8 +909,13 @@
             </aside>
 
             <section class="battlefield-column">
-              <div class="battlefield-frame">
+              <div class="battlefield-frame" data-map-name="${UI.escapeHtml(map.name)}">
                 <canvas id="battle-canvas" width="1280" height="720" aria-label="${UI.escapeHtml(map.name)}宽区域实时战场，包含${(map.routes || []).length}条中央通路"></canvas>
+                <div class="battlefield-chrome" aria-hidden="true">
+                  <span class="is-friendly">ALLY // 部署区</span>
+                  <span class="is-contested">CONTESTED · ${(map.routes || []).length} ROUTES</span>
+                  <span class="is-hostile">HOSTILE // 敌占区</span>
+                </div>
                 <div class="battle-banner-stack" id="battle-banner-stack" aria-live="polite"></div>
                 <div class="tutorial-checklist" id="tutorial-checklist" hidden></div>
                 <div class="battlefield-help">把手牌拖到蓝色战区，或先选牌再点击 · 落点将汇入最近通路</div>

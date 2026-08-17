@@ -17,7 +17,7 @@
     return result;
   };
   const factionOf = (id) => RF.FACTIONS.find((item) => item.id === id) || RF.FACTIONS[0];
-  const artFor = (card) => card?.art || RF.CARD_ART?.[card?.id] || '';
+  const artFor = (card) => RF.THUMBNAIL_ART?.[card?.id] || card?.art || RF.CARD_ART?.[card?.id] || '';
 
   const BOSS_CARDS = {
     ice: 'boss_frost_giant', jungle: 'boss_bloom_mother', magma: 'boss_magma_colossus',
@@ -94,9 +94,9 @@
       const eyebrow = this.root.querySelector('.hero-copy .eyebrow');
       const title = this.root.querySelector('.hero-copy h1');
       const copy = this.root.querySelector('.hero-copy p');
-      if (eyebrow) eyebrow.textContent = 'RIFTFRONT PROTOCOL · V1.4.0';
-      if (title) title.textContent = '王桥索敌重制 + 全新影渊十关';
-      if (copy) copy.textContent = '单位现在拥有独立视野、粘性目标锁定、建筑牵引、桥梁选择与死亡后重索敌。全新十关“影渊篇”围绕这些规则展开，并加入第四阵营影渊教团与更完整的远征商店、精英Boss、营地事件、诅咒和卡牌锻造。';
+      if (eyebrow) eyebrow.textContent = `RIFTFRONT PROTOCOL · V${RF.VERSION}`;
+      if (title) title.textContent = '全单位缩略图 · 建筑动态化';
+      if (copy) copy.textContent = '76个单位与Boss已换成统一的Q版战术缩略图，17种卡牌建筑以及双方核心、前哨均接入四帧动态资源。王桥索敌、影渊十关与八层Boss远征内容完整保留。';
       const heroArt = this.root.querySelector('.hero-art-panel');
       if (heroArt) heroArt.style.backgroundImage = "url('assets/shadow/shadow_campaign.webp')";
       const rogueButton = this.root.querySelector('.hero-actions [data-action="go-rogue"] small');

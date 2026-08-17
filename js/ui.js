@@ -23,7 +23,7 @@
     const selected = Boolean(options.selected);
     const action = options.action ? `data-${options.action}="${escapeHtml(card.id)}"` : '';
     const title = `${card.name}｜${card.cost}费｜${typeNames[card.type] || card.type}\n${card.desc || ''}`;
-    const artSrc = card.art || RF.CARD_ART?.[card.id] || '';
+    const artSrc = RF.THUMBNAIL_ART?.[card.id] || card.art || RF.CARD_ART?.[card.id] || '';
     const art = artSrc ? `style="background-image:linear-gradient(180deg,rgba(4,10,16,.05),rgba(4,10,16,.48)),url('${escapeHtml(artSrc)}')"` : '';
     const faction = factionNames[card.faction] || (card.treasure ? '远征宝藏' : '通用');
     return `
@@ -39,7 +39,7 @@
 
   function handCard(item, selected, playable) {
     const card = item.card;
-    const artSrc = card.art || RF.CARD_ART?.[card.id] || '';
+    const artSrc = RF.THUMBNAIL_ART?.[card.id] || card.art || RF.CARD_ART?.[card.id] || '';
     const art = artSrc ? `style="background-image:linear-gradient(180deg,rgba(4,10,16,.02),rgba(4,10,16,.28)),url('${escapeHtml(artSrc)}')"` : '';
     return `
       <button class="hand-card rarity-${escapeHtml(card.rarity || 'common')} ${artSrc ? 'has-generated-art' : ''} ${card.treasure ? 'is-treasure' : ''} ${selected ? 'is-selected' : ''} ${playable ? '' : 'is-unaffordable'}"

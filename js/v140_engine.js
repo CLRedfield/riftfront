@@ -119,13 +119,6 @@
       entity.navPathIndex = 0;
       entity.nextRepathAt = 0;
       entity.lastNavGoal = null;
-      entity.navFailCount = 0;
-      entity.navStuckCount = 0;
-      entity.navProgressAnchor = { x: entity.x, y: entity.y, at: this.elapsed };
-      entity.unreachableTargets = {};
-      entity.navSlotTargetId = null;
-      entity.navSlotAngle = null;
-      entity.navSlotOrdinal = null;
       const rank = Number(this.mods.cardUpgrades?.[card.id] || 0);
       if (rank > 0) {
         const mul = 1 + 0.16 * rank;
@@ -163,31 +156,12 @@
     });
   };
 
-  function targetTemporarilyUnreachable(engine, entity, target) {
-    if (!target?.id || !entity.unreachableTargets) return false;
-    const until = Number(entity.unreachableTargets[target.id] || 0);
-    if (until <= engine.elapsed) {
-      if (until) delete entity.unreachableTargets[target.id];
-      return false;
-    }
-    return true;
-  }
-
-  function canAdoptTargetLane(engine, entity, target, lane) {
-    if (!Number.isInteger(lane) || lane === entity.lane) return true;
-    const left = Number(engine.map.deploy?.player?.maxX || 470);
-    const right = Number(engine.map.deploy?.enemy?.minX || 810);
-    if (entity.x <= left + 16 || entity.x >= right - 16) return true;
-    const width = Number(engine.routes[entity.lane]?.width || 108);
-    return engine.distanceToRoute(entity.lane, target.x, target.y, left - 24, right + 24) <= width * 0.58;
-  }
-
   proto.findCombatTarget = function findCombatTargetV140(entity) {
     const mode = defaultTargetMode(entity);
     const sight = Number(entity.sightRange || (entity.isBuilding ? entity.range + 42 : Math.max(235, entity.range + 135)));
     const leash = Number(entity.leashRange || sight * 1.55);
     const locked = getTargetById(this, entity.lockedTargetId);
-    if (locked && targetAllowed(entity, locked, this) && !targetTemporarilyUnreachable(this, entity, locked)) {
+    if (locked && targetAllowed(entity, locked, this)) {
       const d = dist(entity, locked);
       if (d <= leash + Number(locked.radius || 0)) return locked;
     }
@@ -196,7 +170,6 @@
     const candidates = [];
     this.entities.forEach((other) => {
       if (!targetAllowed(entity, other, this)) return;
-      if (targetTemporarilyUnreachable(this, entity, other)) return;
       const d = dist(entity, other);
       if (d > sight + Number(other.radius || 0)) return;
       candidates.push({ target: other, distance: d, score: targetScore(entity, other, d) });
@@ -206,7 +179,6 @@
       ? [this.forts.enemyCore, ...this.forts.enemyOutposts]
       : [this.forts.playerCore, ...this.forts.playerOutposts];
     enemyForts.filter((fort) => fort.alive && targetAllowed(entity, fort, this)).forEach((fort) => {
-      if (targetTemporarilyUnreachable(this, entity, fort)) return;
       const d = dist(entity, fort);
       if (d <= sight + fort.radius) candidates.push({ target: fort, distance: d, score: targetScore(entity, fort, d) + (mode === 'buildings' ? -12 : 24) });
     });
@@ -216,13 +188,13 @@
       const target = candidates[0].target;
       entity.lockedTargetId = target.id;
       entity.lockedAt = this.elapsed;
-      if (Number.isInteger(target.lane) && target.lane !== entity.lane && canAdoptTargetLane(this, entity, target, target.lane)) {
+      if (Number.isInteger(target.lane) && target.lane !== entity.lane) {
         entity.lane = target.lane;
         entity.waypointIndex = this.initialWaypointIndex(entity.lane, entity.x, entity.side);
         entity.navPath = null;
       } else if ((target.kind || target.isBuilding) && this.routeCount) {
         const lane = this.nearestRoute(target.x, target.y);
-        if (lane !== entity.lane && canAdoptTargetLane(this, entity, target, lane)) {
+        if (lane !== entity.lane) {
           entity.lane = lane;
           entity.waypointIndex = this.initialWaypointIndex(lane, entity.x, entity.side);
           entity.navPath = null;
@@ -267,146 +239,33 @@
     return null;
   };
 
-  const NAV_CELL = 32;
-  const NAV_CLEARANCE = 0.82;
-  const SPATIAL_CELL = 72;
-
-  function stableHash(value) {
-    const text = String(value || 'unit');
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i += 1) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash >>> 0;
-  }
-
-  function navigationRadius(entity, scale = 1) {
-    return Math.max(4, Number(entity.radius || 12) * NAV_CLEARANCE * scale);
-  }
-
-  function routePenalty(engine, entity, x, y) {
-    if (!engine.routeCount || !Number.isInteger(entity.lane)) return 0;
-    const left = Number(engine.map.deploy?.player?.maxX || 470);
-    const right = Number(engine.map.deploy?.enemy?.minX || 810);
-    if (x <= left - 20 || x >= right + 20) return 0;
-    const lane = clamp(entity.lane, 0, engine.routeCount - 1);
-    const width = Number(engine.routes[lane]?.width || 108);
-    const distance = engine.distanceToRoute(lane, x, y, left - 30, right + 30);
-    const freeDistance = width * 0.46;
-    if (distance <= freeDistance) return 0;
-    return Math.min(7, (distance - freeDistance) / Math.max(18, width * 0.24));
-  }
-
-  function buildSpatialIndex(engine) {
-    const buckets = new Map();
-    const engagementGroups = new Map();
-    engine.entities.forEach((other) => {
-      if (!other.alive || other.isBuilding) return;
-      const gx = Math.floor(other.x / SPATIAL_CELL);
-      const gy = Math.floor(other.y / SPATIAL_CELL);
-      const key = `${gx}:${gy}`;
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(other);
-      if (other.lockedTargetId) {
-        if (!engagementGroups.has(other.lockedTargetId)) engagementGroups.set(other.lockedTargetId, []);
-        engagementGroups.get(other.lockedTargetId).push(other);
-      } else {
-        other.navEngagementIndex = null;
-        other.navEngagementCount = 0;
-      }
-    });
-    engagementGroups.forEach((group) => {
-      group.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-      group.forEach((other, index) => {
-        other.navEngagementIndex = index;
-        other.navEngagementCount = group.length;
-      });
-    });
-    engine.navSpatialIndex = buckets;
-    engine.navBlockers = [
-      ...engine.entities.filter((other) => other.alive && other.isBuilding),
-      ...allForts(engine).filter((fort) => fort.alive)
-    ];
-  }
-
-  function nearbyMovers(engine, entity, range) {
-    if (!engine.navSpatialIndex) return engine.entities;
-    const minX = Math.floor((entity.x - range) / SPATIAL_CELL);
-    const maxX = Math.floor((entity.x + range) / SPATIAL_CELL);
-    const minY = Math.floor((entity.y - range) / SPATIAL_CELL);
-    const maxY = Math.floor((entity.y + range) / SPATIAL_CELL);
-    const nearby = [];
-    for (let gx = minX; gx <= maxX; gx += 1) {
-      for (let gy = minY; gy <= maxY; gy += 1) {
-        const bucket = engine.navSpatialIndex.get(`${gx}:${gy}`);
-        if (bucket) nearby.push(...bucket);
-      }
-    }
-    return nearby;
-  }
-
-  function makeNavQuery(engine, entity, targetId, defaultRadius = navigationRadius(entity)) {
-    const blockers = (engine.navBlockers || [
-      ...engine.entities.filter((other) => other.alive && other.isBuilding && other.id !== entity.id),
-      ...allForts(engine).filter((fort) => fort.alive)
-    ]).filter((blocker) => blocker.id !== entity.id);
-    const startsInsideMapBlocker = !entity.flying && engine.isPointBlocked(entity.x, entity.y, defaultRadius);
-    let mapEscapePoint = null;
-    if (startsInsideMapBlocker) {
-      const ringStep = Math.max(14, defaultRadius * 0.9);
-      for (let ring = 1; ring <= 12 && !mapEscapePoint; ring += 1) {
-        const distance = ring * ringStep;
-        for (let sample = 0; sample < 24; sample += 1) {
-          const angle = sample / 24 * Math.PI * 2;
-          const x = entity.x + Math.cos(angle) * distance;
-          const y = entity.y + Math.sin(angle) * distance;
-          if (!engine.isPointBlocked(x, y, defaultRadius)) {
-            mapEscapePoint = { x, y };
-            break;
-          }
-        }
-      }
-    }
-
-    const blocked = (x, y, radius = defaultRadius) => {
-      if (entity.phaseMovement || entity.flying) return false;
-      if (engine.isPointBlocked(x, y, radius)) {
-        if (!startsInsideMapBlocker || !mapEscapePoint) return true;
-        const currentEscapeDistance = Math.hypot(entity.x - mapEscapePoint.x, entity.y - mapEscapePoint.y);
-        const nextEscapeDistance = Math.hypot(x - mapEscapePoint.x, y - mapEscapePoint.y);
-        if (nextEscapeDistance >= currentEscapeDistance - 0.05) return true;
-      }
-
-      for (const blocker of blockers) {
-        const blockerRadius = Number(blocker.radius || 0);
-        const nextDistance = Math.hypot(x - blocker.x, y - blocker.y);
-        const limit = radius + blockerRadius + 2;
-        if (nextDistance >= limit) continue;
-        const currentDistance = Math.hypot(entity.x - blocker.x, entity.y - blocker.y);
-        if (!(currentDistance < limit && nextDistance > currentDistance + 0.05)) return true;
-      }
-      return false;
-    };
-
-    const lineBlocked = (x1, y1, x2, y2, radius = defaultRadius, respectRoute = false) => {
-      const distance = Math.hypot(x2 - x1, y2 - y1);
-      const steps = Math.max(1, Math.ceil(distance / 18));
-      for (let i = 1; i <= steps; i += 1) {
-        const t = i / steps;
-        const px = x1 + (x2 - x1) * t;
-        const py = y1 + (y2 - y1) * t;
-        if (blocked(px, py, radius)) return true;
-        if (respectRoute && routePenalty(engine, entity, px, py) > 1.25) return true;
-      }
-      return false;
-    };
-
-    return { blocked, lineBlocked, defaultRadius };
-  }
-
   function dynamicBlocked(engine, entity, x, y, radius, targetId) {
-    return makeNavQuery(engine, entity, targetId, radius).blocked(x, y, radius);
+    if (entity.phaseMovement) return false;
+
+    // Deployment can place a troop close enough to its own tower or a terrain lip
+    // that its first step still overlaps the blocker. Permit steps that move OUT
+    // of an existing overlap, otherwise the unit can become permanently pinned.
+    const currentMapBlocked = !entity.flying && engine.isPointBlocked(entity.x, entity.y, radius * 0.76);
+    if (!entity.flying && engine.isPointBlocked(x, y, radius * 0.76) && !currentMapBlocked) return true;
+
+    const overlapsBlocker = (blocker, scale) => {
+      const limit = radius * scale + Number(blocker.radius || 0) + 2;
+      const nextDistance = Math.hypot(x - blocker.x, y - blocker.y);
+      if (nextDistance >= limit) return false;
+      const currentDistance = Math.hypot(entity.x - blocker.x, entity.y - blocker.y);
+      // Already inside the collision shell: an outward step is always legal.
+      return !(currentDistance < limit && nextDistance > currentDistance + 0.05);
+    };
+
+    const buildings = engine.entities.filter((other) => other.alive && other.isBuilding && other.id !== targetId && other.id !== entity.id);
+    for (const building of buildings) {
+      if (overlapsBlocker(building, 0.72)) return true;
+    }
+    for (const fort of allForts(engine)) {
+      if (!fort.alive || fort.id === targetId) continue;
+      if (overlapsBlocker(fort, 0.7)) return true;
+    }
+    return false;
   }
 
   class MinHeap {
@@ -434,73 +293,8 @@
     get length() { return this.a.length; }
   }
 
-  function navigationGoals(engine, entity, goalX, goalY, targetId, query) {
-    const target = getTargetById(engine, targetId);
-    if (!target) {
-      entity.navSlotTargetId = null;
-      entity.navSlotAngle = null;
-      entity.navSlotOrdinal = null;
-      return [{ x: goalX, y: goalY, preference: 0 }];
-    }
-
-    const maxRange = Math.max(8, Number(entity.range || 25) + Number(target.radius || 12));
-    const minRange = Math.max(0, Number(entity.minRange || 0));
-    const ranged = minRange > 0 || Number(entity.range || 0) >= 70 || entity.role === 'ranged' || entity.role === 'siege' || entity.role === 'healer';
-    const baseDistance = ranged
-      ? clamp(maxRange - 10, minRange + 12, Math.max(minRange + 12, maxRange - 3))
-      : Math.max(Number(target.radius || 12) + navigationRadius(entity) + 2, maxRange - 4);
-
-    const spacing = Math.max(12, Number(entity.radius || 12) * 2 + 5);
-    const capacity = Math.max(6, Math.floor(Math.PI * 2 * baseDistance / spacing));
-    const engagementIndex = Math.max(0, Number.isInteger(entity.navEngagementIndex) ? entity.navEngagementIndex : stableHash(`${entity.id}:${target.id}`) % capacity);
-    const ring = Math.floor(engagementIndex / capacity);
-    const slot = engagementIndex % capacity;
-    const step = Math.PI * 2 / capacity;
-    const slotStep = slot === 0 ? 0 : Math.ceil(slot / 2) * step * (slot % 2 ? 1 : -1);
-    const desiredDistance = baseDistance + ring * spacing * 0.92;
-
-    if (entity.navSlotTargetId !== target.id || entity.navSlotOrdinal !== engagementIndex || !Number.isFinite(entity.navSlotAngle)) {
-      const approach = entity.side === SIDE_PLAYER ? Math.PI : 0;
-      entity.navSlotTargetId = target.id;
-      entity.navSlotOrdinal = engagementIndex;
-      entity.navSlotAngle = approach + slotStep;
-    }
-
-    const offsets = [0, 0.34, -0.34, 0.68, -0.68, 1.02, -1.02, 1.4, -1.4, Math.PI];
-    const goals = [];
-    offsets.forEach((offset, index) => {
-      const angle = entity.navSlotAngle + offset;
-      const x = clamp(target.x + Math.cos(angle) * desiredDistance, FIELD.left + query.defaultRadius + 2, FIELD.right - query.defaultRadius - 2);
-      const y = clamp(target.y + Math.sin(angle) * desiredDistance, FIELD.top + query.defaultRadius + 2, FIELD.bottom - query.defaultRadius - 2);
-      if (query.blocked(x, y)) return;
-      if (ranged && query.lineBlocked(x, y, target.x, target.y, Math.min(5, query.defaultRadius * 0.4), false)) return;
-      goals.push({ x, y, preference: index * 0.18 });
-    });
-    return goals.length ? goals : [{ x: goalX, y: goalY, preference: 3 }];
-  }
-
-  function smoothPath(entity, points, query) {
-    if (points.length < 2) return points;
-    const smoothed = [];
-    let anchor = { x: entity.x, y: entity.y };
-    let index = 0;
-    while (index < points.length) {
-      let selected = index;
-      for (let candidate = points.length - 1; candidate >= index; candidate -= 1) {
-        if (!query.lineBlocked(anchor.x, anchor.y, points[candidate].x, points[candidate].y, query.defaultRadius, true)) {
-          selected = candidate;
-          break;
-        }
-      }
-      smoothed.push(points[selected]);
-      anchor = points[selected];
-      index = selected + 1;
-    }
-    return smoothed;
-  }
-
-  function navPath(engine, entity, goals, targetId, query) {
-    const step = NAV_CELL;
+  function navPath(engine, entity, goalX, goalY, targetId) {
+    const step = 32;
     const cols = Math.floor((FIELD.right - FIELD.left) / step) + 1;
     const rows = Math.floor((FIELD.bottom - FIELD.top) / step) + 1;
     const toGrid = (x, y) => ({
@@ -509,78 +303,42 @@
     });
     const toWorld = (gx, gy) => ({ x: FIELD.left + gx * step, y: FIELD.top + gy * step });
     const start = toGrid(entity.x, entity.y);
+    const goal = toGrid(goalX, goalY);
     const key = (gx, gy) => gy * cols + gx;
     const startKey = key(start.gx, start.gy);
-    const gridGoals = new Map();
-    const heuristicGoals = goals.map((goal) => ({ ...toGrid(goal.x, goal.y), preference: Number(goal.preference || 0) }));
-    goals.forEach((goal) => {
-      const center = toGrid(goal.x, goal.y);
-      for (let ring = 0; ring <= 2; ring += 1) {
-        for (let ox = -ring; ox <= ring; ox += 1) {
-          for (let oy = -ring; oy <= ring; oy += 1) {
-            if (ring > 0 && Math.max(Math.abs(ox), Math.abs(oy)) !== ring) continue;
-            const gx = center.gx + ox;
-            const gy = center.gy + oy;
-            if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) continue;
-            const world = toWorld(gx, gy);
-            if (Math.hypot(world.x - goal.x, world.y - goal.y) > step * 1.05) continue;
-            if (key(gx, gy) !== startKey && query.blocked(world.x, world.y)) continue;
-            const score = Number(goal.preference || 0) + Math.hypot(world.x - goal.x, world.y - goal.y) / step;
-            const existing = gridGoals.get(key(gx, gy));
-            if (!existing || score < existing.score) gridGoals.set(key(gx, gy), { ...goal, gx, gy, score });
-          }
-        }
-      }
-    });
-
-    const heuristic = (gx, gy) => {
-      let best = Infinity;
-      heuristicGoals.forEach((goal) => {
-        best = Math.min(best, Math.hypot(gx - goal.gx, gy - goal.gy) + Number(goal.preference || 0));
-      });
-      return best;
-    };
-
-    if (!heuristicGoals.length) return { points: [], reached: false, remainingDistance: Infinity, expanded: 0 };
+    const goalKey = key(goal.gx, goal.gy);
     const heap = new MinHeap();
     const gScore = new Map([[startKey, 0]]);
     const came = new Map();
-    const closed = new Set();
-    heap.push({ gx: start.gx, gy: start.gy, g: 0, f: heuristic(start.gx, start.gy), k: startKey });
+    heap.push({ gx: start.gx, gy: start.gy, f: 0, k: startKey });
     const directions = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.414],[1,-1,1.414],[-1,1,1.414],[-1,-1,1.414]];
     let found = null;
-    let best = { gx: start.gx, gy: start.gy, k: startKey, h: heuristic(start.gx, start.gy) };
     let expanded = 0;
-    while (heap.length && expanded < 1400) {
-      const cur = heap.pop();
-      if (cur.g !== gScore.get(cur.k) || closed.has(cur.k)) continue;
-      closed.add(cur.k);
-      expanded += 1;
-      const h = heuristic(cur.gx, cur.gy);
-      if (h < best.h) best = { ...cur, h };
-      if (gridGoals.has(cur.k)) { found = cur; break; }
+    while (heap.length && expanded < 950) {
+      const cur = heap.pop(); expanded += 1;
+      if (cur.k === goalKey || Math.hypot(cur.gx - goal.gx, cur.gy - goal.gy) <= 1) { found = cur; break; }
+      const baseG = gScore.get(cur.k) ?? Infinity;
       for (const [dx,dy,cost] of directions) {
         const gx = cur.gx + dx, gy = cur.gy + dy;
         if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) continue;
         const world = toWorld(gx, gy);
-        if (query.blocked(world.x, world.y)) continue;
+        if (dynamicBlocked(engine, entity, world.x, world.y, entity.radius, targetId) && Math.hypot(gx-goal.gx, gy-goal.gy) > 1) continue;
         if (dx && dy) {
           const w1 = toWorld(cur.gx + dx, cur.gy), w2 = toWorld(cur.gx, cur.gy + dy);
-          if (query.blocked(w1.x, w1.y, query.defaultRadius * 0.88) || query.blocked(w2.x, w2.y, query.defaultRadius * 0.88)) continue;
+          if (dynamicBlocked(engine, entity, w1.x, w1.y, entity.radius * 0.7, targetId) || dynamicBlocked(engine, entity, w2.x, w2.y, entity.radius * 0.7, targetId)) continue;
         }
         const nk = key(gx, gy);
-        if (closed.has(nk)) continue;
-        const ng = cur.g + cost + routePenalty(engine, entity, world.x, world.y) * 0.72;
+        const ng = baseG + cost;
         if (ng >= (gScore.get(nk) ?? Infinity)) continue;
         gScore.set(nk, ng);
         came.set(nk, cur.k);
-        heap.push({ gx, gy, g: ng, k: nk, f: ng + heuristic(gx, gy) });
+        const h = Math.hypot(gx - goal.gx, gy - goal.gy);
+        heap.push({ gx, gy, k: nk, f: ng + h * 1.05 });
       }
     }
-    const endpointNode = found || best;
-    if (!endpointNode || endpointNode.k === startKey) return { points: [], reached: false, remainingDistance: best.h * step, expanded };
+    if (!found) return [];
     const path = [];
-    let currentKey = endpointNode.k;
+    let currentKey = found.k;
     let safety = 0;
     while (currentKey !== startKey && safety < 1000) {
       const gy = Math.floor(currentKey / cols), gx = currentKey - gy * cols;
@@ -590,148 +348,77 @@
       safety += 1;
     }
     path.reverse();
-    if (found) {
-      const exactGoal = gridGoals.get(found.k);
-      const last = path[path.length - 1] || { x: entity.x, y: entity.y };
-      if (!query.lineBlocked(last.x, last.y, exactGoal.x, exactGoal.y, query.defaultRadius, true)) path.push({ x: exactGoal.x, y: exactGoal.y });
-    }
-    return { points: smoothPath(entity, path, query), reached: Boolean(found), remainingDistance: found ? 0 : best.h * step, expanded };
+    path.push({ x: goalX, y: goalY });
+    return path;
   }
 
-  function directStep(engine, entity, targetX, targetY, dt, speedMul, targetId, query = null) {
+  function directStep(engine, entity, targetX, targetY, dt, speedMul, targetId) {
     const dx = targetX - entity.x, dy = targetY - entity.y;
     const distance = Math.hypot(dx, dy);
-    if (distance < 0.5) return false;
+    if (distance < 0.5) return;
     let vx = dx / distance, vy = dy / distance;
     let separationX = 0, separationY = 0;
     const myMass = Math.max(0.2, Number(entity.mass || 1));
-    const neighbors = nearbyMovers(engine, entity, Math.max(84, entity.radius * 4));
-    neighbors.forEach((other) => {
-      if (!other.alive || other.id === entity.id || other.isBuilding || Boolean(other.flying) !== Boolean(entity.flying)) return;
+    engine.entities.forEach((other) => {
+      if (!other.alive || other.id === entity.id || other.isBuilding || other.flying || entity.flying) return;
       const ox = entity.x - other.x, oy = entity.y - other.y;
       const d = Math.hypot(ox, oy);
       const desired = entity.radius + other.radius + (other.side === entity.side ? 5 : 2);
-      if (d > desired * 1.65) return;
+      if (d <= 0.01 || d > desired * 1.5) return;
       const otherMass = Math.max(0.2, Number(other.mass || 1));
-      const pressure = (desired * 1.65 - d) / (desired * 1.65);
+      const pressure = (desired * 1.5 - d) / (desired * 1.5);
       const weight = other.side === entity.side ? clamp(otherMass / myMass, 0.35, 2.2) : 1.35;
-      const angle = d > 0.01 ? Math.atan2(oy, ox) : (stableHash(`${entity.id}:${other.id}`) % 628) / 100;
-      separationX += Math.cos(angle) * pressure * weight;
-      separationY += Math.sin(angle) * pressure * weight;
+      separationX += ox / d * pressure * weight;
+      separationY += oy / d * pressure * weight;
+      if (entity.heavy && entity.side === other.side && myMass > otherMass * 1.6 && d < desired) {
+        const push = Math.min(0.8, (myMass / otherMass - 1) * 0.15);
+        const nx = clamp(other.x - ox / d * push, FIELD.left + other.radius, FIELD.right - other.radius);
+        const ny = clamp(other.y - oy / d * push, FIELD.top + other.radius, FIELD.bottom - other.radius);
+        if (!dynamicBlocked(engine, other, nx, ny, other.radius * 0.65, null)) { other.x = nx; other.y = ny; }
+      }
     });
-    vx += separationX * 0.92; vy += separationY * 0.92;
+    vx += separationX * 0.78; vy += separationY * 0.78;
     const len = Math.hypot(vx, vy) || 1; vx /= len; vy /= len;
     const step = Math.min(distance, Math.max(0, Number(entity.speed || 0) * speedMul * dt));
     const base = Math.atan2(vy, vx);
-    const avoidSign = Number(entity.navAvoidSign || (stableHash(entity.id) % 2 ? 1 : -1));
-    entity.navAvoidSign = avoidSign;
-    const offsets = [0,0.28*avoidSign,-0.28*avoidSign,0.56*avoidSign,-0.56*avoidSign,0.92*avoidSign,-0.92*avoidSign,1.3*avoidSign,-1.3*avoidSign];
+    const offsets = [0,0.32,-0.32,0.62,-0.62,1.0,-1.0,1.38,-1.38];
     let best = null;
     for (const offset of offsets) {
       const angle = base + offset;
       const nx = clamp(entity.x + Math.cos(angle) * step, FIELD.left + entity.radius + 2, FIELD.right - entity.radius - 2);
       const ny = clamp(entity.y + Math.sin(angle) * step, FIELD.top + entity.radius + 2, FIELD.bottom - entity.radius - 2);
-      if (!entity.flying && (query || makeNavQuery(engine, entity, targetId)).blocked(nx, ny)) continue;
-      let crowdPenalty = 0;
-      neighbors.forEach((other) => {
-        if (!other.alive || other.id === entity.id || other.isBuilding || Boolean(other.flying) !== Boolean(entity.flying)) return;
-        const nextDistance = Math.hypot(nx - other.x, ny - other.y);
-        const softLimit = (entity.radius + other.radius) * (other.side === entity.side ? 0.9 : 0.78);
-        if (nextDistance < softLimit) crowdPenalty += (softLimit - nextDistance) * (other.side === entity.side ? 1.7 : 1.15);
-      });
-      const score = Math.hypot(targetX - nx, targetY - ny) + Math.abs(offset) * 3.2 + crowdPenalty;
+      if (!entity.flying && dynamicBlocked(engine, entity, nx, ny, entity.radius * 0.82, targetId)) continue;
+      const score = Math.hypot(targetX - nx, targetY - ny) + Math.abs(offset) * 4;
       if (!best || score < best.score) best = { x:nx,y:ny,angle,score };
     }
-    if (!best) return false;
+    if (!best) return;
     entity.x = best.x; entity.y = best.y; entity.facing = best.angle; entity.moving = true;
     entity.walkPhase = Number(entity.walkPhase || 0) + dt * (4 + entity.speed * 0.06);
-    return true;
-  }
-
-  function markTargetUnreachable(engine, entity, targetId) {
-    if (!targetId) return;
-    if (!entity.unreachableTargets) entity.unreachableTargets = {};
-    entity.unreachableTargets[targetId] = engine.elapsed + 1.6;
-    if (entity.lockedTargetId === targetId) entity.lockedTargetId = null;
-    entity.navSlotTargetId = null;
-    entity.navSlotAngle = null;
-    entity.navSlotOrdinal = null;
-    entity.navPath = null;
-    entity.navPathIndex = 0;
-    entity.navFailCount = 0;
-  }
-
-  function updateNavigationProgress(engine, entity, targetId) {
-    const anchor = entity.navProgressAnchor;
-    if (!anchor) {
-      entity.navProgressAnchor = { x: entity.x, y: entity.y, at: engine.elapsed };
-      return;
-    }
-    if (Math.hypot(entity.x - anchor.x, entity.y - anchor.y) >= 8) {
-      entity.navProgressAnchor = { x: entity.x, y: entity.y, at: engine.elapsed };
-      entity.navStuckCount = 0;
-      return;
-    }
-    if (engine.elapsed - anchor.at < 0.72) return;
-    entity.navProgressAnchor = { x: entity.x, y: entity.y, at: engine.elapsed };
-    entity.navStuckCount = Number(entity.navStuckCount || 0) + 1;
-    entity.nextRepathAt = 0;
-    entity.navAvoidSign = -Number(entity.navAvoidSign || 1);
-    if (targetId && entity.navLastPlanReached === false && entity.navStuckCount >= 2) markTargetUnreachable(engine, entity, targetId);
   }
 
   proto.moveEntityToward = function moveEntityTowardV140(entity, targetX, targetY, dt, speedMul) {
-    const lockedTarget = getTargetById(this, entity.lockedTargetId);
-    const movingToLockedTarget = lockedTarget && Math.hypot(targetX - lockedTarget.x, targetY - lockedTarget.y) <= 4;
-    const targetId = entity.navMoveTargetId || (movingToLockedTarget ? entity.lockedTargetId : null);
-    const query = makeNavQuery(this, entity, targetId);
-    const goals = navigationGoals(this, entity, targetX, targetY, targetId, query);
-    const primaryGoal = goals[0] || { x: targetX, y: targetY };
-    if (entity.flying) {
-      directStep(this, entity, primaryGoal.x, primaryGoal.y, dt, speedMul, targetId, query);
-      updateNavigationProgress(this, entity, targetId);
-      return;
-    }
-    const directBlocked = entity.phaseMovement ? false : query.lineBlocked(entity.x, entity.y, primaryGoal.x, primaryGoal.y, query.defaultRadius, true);
-    const goalMoved = !entity.lastNavGoal || Math.hypot(entity.lastNavGoal.x - primaryGoal.x, entity.lastNavGoal.y - primaryGoal.y) > 34 || entity.lastNavGoal.targetId !== targetId;
+    const targetId = entity.lockedTargetId || null;
+    if (entity.flying) { directStep(this, entity, targetX, targetY, dt, speedMul, targetId); return; }
+    const directBlocked = entity.phaseMovement ? false : (this.isLineBlocked(entity.x, entity.y, targetX, targetY, Math.min(8, entity.radius * 0.55)) || dynamicBlocked(this, entity, targetX, targetY, entity.radius * 0.55, targetId));
+    const goalMoved = !entity.lastNavGoal || Math.hypot(entity.lastNavGoal.x - targetX, entity.lastNavGoal.y - targetY) > 50 || entity.lastNavGoal.targetId !== targetId;
     if (!directBlocked) {
-      entity.navPath = null; entity.navPathIndex = 0; entity.navLastPlanReached = true; entity.navFailCount = 0;
-      entity.lastNavGoal = { x:primaryGoal.x,y:primaryGoal.y,targetId };
-      directStep(this, entity, primaryGoal.x, primaryGoal.y, dt, speedMul, targetId, query);
-      updateNavigationProgress(this, entity, targetId);
+      entity.navPath = null; entity.navPathIndex = 0; entity.lastNavGoal = { x:targetX,y:targetY,targetId };
+      directStep(this, entity, targetX, targetY, dt, speedMul, targetId);
       return;
     }
     if (!entity.navPath || goalMoved || this.elapsed >= Number(entity.nextRepathAt || 0)) {
-      if (goalMoved) entity.navBestRemaining = Infinity;
-      const result = navPath(this, entity, goals, targetId, query);
-      entity.navPath = result.points;
+      entity.navPath = navPath(this, entity, targetX, targetY, targetId);
       entity.navPathIndex = 0;
-      entity.navLastPlanReached = result.reached;
-      entity.nextRepathAt = this.elapsed + (result.reached ? 0.78 + Math.random() * 0.28 : 0.34 + Math.random() * 0.16);
-      entity.lastNavGoal = { x:primaryGoal.x,y:primaryGoal.y,targetId };
-      if (result.reached) {
-        entity.navFailCount = 0;
-        entity.navBestRemaining = 0;
-      } else {
-        const improved = result.remainingDistance + 14 < Number(entity.navBestRemaining ?? Infinity);
-        entity.navFailCount = improved ? 0 : Number(entity.navFailCount || 0) + 1;
-        entity.navBestRemaining = Math.min(Number(entity.navBestRemaining ?? Infinity), result.remainingDistance);
-        if ((!result.points.length && entity.navFailCount >= 2) || entity.navFailCount >= 3) {
-          markTargetUnreachable(this, entity, targetId);
-          return;
-        }
-      }
+      entity.nextRepathAt = this.elapsed + 0.52 + Math.random() * 0.24;
+      entity.lastNavGoal = { x:targetX,y:targetY,targetId };
     }
     const path = entity.navPath || [];
-    const arrival = Math.min(24, Math.max(12, entity.radius * 0.72 + 7));
-    while (entity.navPathIndex < path.length - 1 && Math.hypot(path[entity.navPathIndex].x - entity.x, path[entity.navPathIndex].y - entity.y) < arrival) entity.navPathIndex += 1;
-    const waypoint = path[entity.navPathIndex];
-    if (waypoint) directStep(this, entity, waypoint.x, waypoint.y, dt, speedMul, targetId, query);
-    updateNavigationProgress(this, entity, targetId);
+    while (entity.navPathIndex < path.length - 1 && Math.hypot(path[entity.navPathIndex].x - entity.x, path[entity.navPathIndex].y - entity.y) < Math.max(20, entity.radius + 8)) entity.navPathIndex += 1;
+    const waypoint = path[entity.navPathIndex] || { x:targetX,y:targetY };
+    directStep(this, entity, waypoint.x, waypoint.y, dt, speedMul, targetId);
   };
 
   proto.updateEntities = function updateEntitiesV140(dt) {
-    buildSpatialIndex(this);
     const snapshot = [...this.entities];
     snapshot.forEach((entity) => {
       if (!entity.alive) return;
@@ -765,11 +452,7 @@
           const distance = this.distanceToTarget(entity, target);
           if (entity.cooldownRemaining <= 0 && distance <= entity.range + target.radius && (entity.flying || !this.isLineBlocked(entity.x, entity.y, target.x, target.y, 4))) {
             this.healTarget(target, entity.heal, true, entity); entity.cooldownRemaining = entity.cooldown; entity.facing = Math.atan2(target.y - entity.y, target.x - entity.x);
-          } else if (!entity.isBuilding) {
-            entity.navMoveTargetId = target.id;
-            this.moveEntityToward(entity, target.x, target.y, dt, speedMul);
-            entity.navMoveTargetId = null;
-          }
+          } else if (!entity.isBuilding) this.moveEntityToward(entity, target.x, target.y, dt, speedMul);
         } else if (!entity.isBuilding) this.advanceEntity(entity, dt, speedMul);
         return;
       }

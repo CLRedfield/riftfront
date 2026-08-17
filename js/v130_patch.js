@@ -17,7 +17,7 @@
   const cloneDeck = (deck) => ({ arsenal: [...deckList(deck)] });
   const factionOf = (id) => RF.FACTIONS.find((item) => item.id === id) || RF.FACTIONS[0];
   const starterOf = (id) => RF.ROGUE_STARTER_DECKS[id] || RF.ROGUE_STARTER_DECKS[RF.FACTIONS[0].id];
-  const artFor = (card) => card?.art || RF.CARD_ART?.[card?.id] || '';
+  const artFor = (card) => RF.THUMBNAIL_ART?.[card?.id] || card?.art || RF.CARD_ART?.[card?.id] || '';
 
   const BOSS_CARDS = {
     ice: 'boss_frost_giant',

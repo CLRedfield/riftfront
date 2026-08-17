@@ -4,7 +4,7 @@
   const RF = window.RF;
   const UI = RF.UI;
   const deckList = (deck) => Array.isArray(deck?.arsenal) ? deck.arsenal : [];
-  const artFor = (card) => card?.art || RF.CARD_ART?.[card?.id] || '';
+  const artFor = (card) => RF.THUMBNAIL_ART?.[card?.id] || card?.art || RF.CARD_ART?.[card?.id] || '';
 
   document.addEventListener('DOMContentLoaded', () => {
     const app = window.RiftfrontApp;

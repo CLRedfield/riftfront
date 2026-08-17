@@ -1350,16 +1350,11 @@
       if (x - radius < FIELD.left || x + radius > FIELD.right || y - radius < FIELD.top || y + radius > FIELD.bottom) return true;
       return this.obstacles.some((obstacle) => {
         if (obstacle.shape === 'circle') return Math.hypot(x - Number(obstacle.x), y - Number(obstacle.y)) < Number(obstacle.r || 0) + radius;
-        const width = Number(obstacle.w || 0);
-        const height = Number(obstacle.h || 0);
-        const halfWidth = width * 0.5;
-        const halfHeight = height * 0.5;
-        const corner = clamp(Number(obstacle.radius || 0), 0, Math.min(halfWidth, halfHeight));
-        const qx = Math.abs(x - (Number(obstacle.x) + halfWidth)) - (halfWidth - corner);
-        const qy = Math.abs(y - (Number(obstacle.y) + halfHeight)) - (halfHeight - corner);
-        const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
-        const inside = Math.min(Math.max(qx, qy), 0);
-        return outside + inside - corner < radius;
+        const left = Number(obstacle.x) - radius;
+        const right = Number(obstacle.x) + Number(obstacle.w || 0) + radius;
+        const top = Number(obstacle.y) - radius;
+        const bottom = Number(obstacle.y) + Number(obstacle.h || 0) + radius;
+        return x > left && x < right && y > top && y < bottom;
       });
     }
 
@@ -1925,19 +1920,34 @@
       RF.audio.play('click');
     }
 
+    canvasPointFromClient(clientX, clientY) {
+      const rect = this.canvas.getBoundingClientRect();
+      const scale = Math.min(rect.width / WIDTH, rect.height / HEIGHT);
+      const renderWidth = WIDTH * scale;
+      const renderHeight = HEIGHT * scale;
+      const offsetX = (rect.width - renderWidth) * 0.5;
+      const offsetY = (rect.height - renderHeight) * 0.5;
+      const localX = clientX - rect.left - offsetX;
+      const localY = clientY - rect.top - offsetY;
+      return {
+        inside: localX >= 0 && localX <= renderWidth && localY >= 0 && localY <= renderHeight,
+        x: localX / Math.max(0.001, scale),
+        y: localY / Math.max(0.001, scale)
+      };
+    }
+
     onPointerMove(event) {
       if (this.mouse.external) return;
-      const rect = this.canvas.getBoundingClientRect();
-      this.mouse.x = (event.clientX - rect.left) * WIDTH / rect.width;
-      this.mouse.y = (event.clientY - rect.top) * HEIGHT / rect.height;
-      this.mouse.inside = true;
+      const point = this.canvasPointFromClient(event.clientX, event.clientY);
+      this.mouse.x = point.x;
+      this.mouse.y = point.y;
+      this.mouse.inside = point.inside;
     }
     onPointerDown(event) {
       if (event.button !== 0) return;
-      const rect = this.canvas.getBoundingClientRect();
-      const x = (event.clientX - rect.left) * WIDTH / rect.width;
-      const y = (event.clientY - rect.top) * HEIGHT / rect.height;
-      this.playSelectedAt(x, y);
+      const point = this.canvasPointFromClient(event.clientX, event.clientY);
+      if (!point.inside) return;
+      this.playSelectedAt(point.x, point.y);
     }
     emitEvent(type, payload = {}) {
       this.callbacks.onEvent({ type, ...payload });
@@ -2172,38 +2182,59 @@
       ctx.lineJoin = 'round';
       this.routes.forEach((route, lane) => {
         const width = Number(route.width || 108);
-        ctx.strokeStyle = 'rgba(2, 7, 12, 0.52)';
-        ctx.lineWidth = width + 22;
+        const deckGradient = ctx.createLinearGradient(245, 0, 1035, 0);
+        deckGradient.addColorStop(0, 'rgba(31, 86, 111, .44)');
+        deckGradient.addColorStop(.42, 'rgba(32, 49, 61, .55)');
+        deckGradient.addColorStop(.58, 'rgba(47, 43, 50, .55)');
+        deckGradient.addColorStop(1, 'rgba(103, 47, 45, .42)');
+
+        // 桥梁投影、外壳和甲板三层分开绘制，保留地图底图的材质信息。
+        ctx.shadowColor = 'rgba(0, 0, 0, .72)';
+        ctx.shadowBlur = 18;
+        ctx.strokeStyle = 'rgba(1, 5, 9, .76)';
+        ctx.lineWidth = width + 24;
+        this.drawRouteSegment(ctx, lane);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        ctx.strokeStyle = 'rgba(132, 171, 187, .29)';
+        ctx.lineWidth = width + 10;
         this.drawRouteSegment(ctx, lane);
         ctx.stroke();
 
-        ctx.strokeStyle = 'rgba(206, 232, 241, 0.085)';
+        ctx.strokeStyle = deckGradient;
         ctx.lineWidth = width;
         this.drawRouteSegment(ctx, lane);
         ctx.stroke();
 
-        ctx.strokeStyle = 'rgba(77, 198, 255, 0.13)';
-        ctx.lineWidth = width * 0.86;
+        ctx.strokeStyle = 'rgba(123, 218, 248, .15)';
+        ctx.lineWidth = width * .78;
         this.drawRouteSegment(ctx, lane, 245, 640);
         ctx.stroke();
-        ctx.strokeStyle = 'rgba(255, 112, 96, 0.12)';
+        ctx.strokeStyle = 'rgba(255, 126, 104, .14)';
         this.drawRouteSegment(ctx, lane, 640, 1035);
         ctx.stroke();
 
-        ctx.strokeStyle = 'rgba(232, 246, 251, 0.22)';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([18, 15]);
+        // 流动中心线既表达可行路径，也承担轻量战场动效。
+        ctx.strokeStyle = 'rgba(222, 244, 251, .28)';
+        ctx.lineWidth = 2.2;
+        ctx.setLineDash([22, 17]);
+        ctx.lineDashOffset = -this.elapsed * 24;
         this.drawRouteSegment(ctx, lane);
         ctx.stroke();
         ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
 
-        [390, 640, 890].forEach((x) => {
+        [380, 640, 900].forEach((originX, markerIndex) => {
+          const direction = originX < 640 ? 1 : -1;
+          const travel = ((this.elapsed * 18 + markerIndex * 13) % 34) * direction;
+          const x = originX + travel;
           const point = this.routePointAtX(lane, x);
           const angle = this.routeAngleAtX(lane, x);
           ctx.save();
           ctx.translate(point.x, point.y);
-          ctx.rotate(angle);
-          ctx.globalAlpha = 0.34;
+          ctx.rotate(angle + (direction < 0 ? Math.PI : 0));
+          ctx.globalAlpha = .46;
           ctx.strokeStyle = x < 640 ? '#8ddfff' : '#ffad9a';
           ctx.lineWidth = 2;
           ctx.beginPath();
@@ -2214,29 +2245,47 @@
         });
 
         const labelPoint = this.routePointAtX(lane, 500);
-        ctx.fillStyle = 'rgba(241, 250, 253, 0.58)';
-        ctx.font = '800 12px system-ui, sans-serif';
+        const label = `${route.short || `R-${lane + 1}`} · ${route.name}`;
+        ctx.font = '800 11px system-ui, sans-serif';
+        const labelWidth = Math.min(184, Math.max(100, ctx.measureText(label).width + 24));
+        ctx.fillStyle = 'rgba(4, 13, 20, .68)';
+        ctx.strokeStyle = 'rgba(172, 222, 239, .18)';
+        ctx.lineWidth = 1;
+        this.roundRect(ctx, labelPoint.x - labelWidth / 2, labelPoint.y - width * .5 - 30, labelWidth, 22, 7);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(226, 244, 250, .72)';
         ctx.textAlign = 'center';
-        ctx.fillText(`${route.short || lane + 1} · ${route.name}`, labelPoint.x, labelPoint.y - width * 0.5 - 13);
+        ctx.fillText(label, labelPoint.x, labelPoint.y - width * .5 - 15);
       });
 
       const relay = this.map.relay || [640, 360];
-      const pulse = 0.58 + Math.sin(this.elapsed * 2.2) * 0.12;
+      const pulse = .7 + Math.sin(this.elapsed * 2.2) * .12;
+      const relayGlow = ctx.createRadialGradient(relay[0], relay[1], 2, relay[0], relay[1], 48);
+      relayGlow.addColorStop(0, 'rgba(216, 248, 255, .34)');
+      relayGlow.addColorStop(.4, 'rgba(91, 207, 245, .15)');
+      relayGlow.addColorStop(1, 'rgba(57, 165, 220, 0)');
+      ctx.fillStyle = relayGlow;
+      ctx.beginPath(); ctx.arc(relay[0], relay[1], 48, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = pulse;
-      ctx.strokeStyle = '#c2e8ff';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(relay[0], relay[1], 31, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.arc(relay[0], relay[1], 17, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = '#bdefff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 7]);
+      ctx.lineDashOffset = this.elapsed * 12;
+      ctx.beginPath(); ctx.arc(relay[0], relay[1], 33, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+      ctx.beginPath(); ctx.arc(relay[0], relay[1], 16, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
-      ctx.fillStyle = 'rgba(255,255,255,0.68)';
-      ctx.font = '800 10px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(231, 249, 255, .82)';
+      ctx.font = '900 9px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('中继', relay[0], relay[1] + 4);
+      ctx.fillText('SYNC', relay[0], relay[1] + 3);
 
       ctx.textAlign = 'left';
-      ctx.fillStyle = 'rgba(235,248,252,0.54)';
-      ctx.font = '800 11px system-ui, sans-serif';
-      ctx.fillText(`${this.map.name} · ${this.routeCount}条通路`, FIELD.left + 16, FIELD.bottom - 14);
+      ctx.fillStyle = 'rgba(225, 244, 250, .52)';
+      ctx.font = '800 10px system-ui, sans-serif';
+      ctx.fillText(`RF // ${this.map.name} // ROUTES ${String(this.routeCount).padStart(2, '0')}`, FIELD.left + 16, FIELD.bottom - 14);
       ctx.restore();
     }
 

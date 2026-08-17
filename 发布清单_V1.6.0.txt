@@ -1,0 +1,16 @@
+《裂界战线》V1.6.0 发布清单
+
+版本：1.6.0
+文件总数：212
+单位缩略图：76
+建筑缩略图：17
+卡牌建筑动画：17
+核心与前哨动画：4
+原始生成图集：8
+
+关键文件 SHA-256：
+js/v160_visual_patch.js  54f6c2791da2c125b1fd19c7ed95dead4e75779df652b014dcc6d5f10d46a911
+js/v150_art_patch.js     51d86f30312402aa65ff1f28a1115fbaf7e753a66d3d2876d57602652d7ef315
+assets/v160_asset_manifest.json  298e5e6b2347b6485eaabc8a38c870adfdb2e4e2b2bb2fdf5724031008e33bbd
+
+测试：全部 JS 语法检查通过；Node VM 运行时冒烟通过；Chromium DOM 冒烟通过；本地资源请求 404 为 0。

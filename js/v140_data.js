@@ -109,7 +109,7 @@
   RF.CARDS = Object.freeze(cards);
 
   const shadowFaction = Object.freeze({
-    id: 'shadow', name: '影渊教团', title: '诱导与隐匿', art: 'assets/shadow/faction_shadow.webp', color: '#9c63ff',
+    id: 'shadow', name: '影渊教团', title: '诱导与隐匿', art: 'assets/shadow/faction_shadow_v2.webp', color: '#9c63ff',
     passiveName: '灵能渗透', passiveDesc: '单位第一次锁定目标时获得2.8秒狂热；全军索敌范围提高8%。',
     signatureCard: 'shadow_archon', mods: { sightRangeMul: 0.08, firstAggroHaste: 2.8 }
   });
