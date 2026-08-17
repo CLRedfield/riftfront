@@ -1,0 +1,12 @@
+《裂界战线》V1.5.0 启动说明
+
+1. 请先完整解压 ZIP。
+2. 进入 riftfront_pve_demo_v1.4.0 文件夹。
+3. 双击 index.html。
+4. 推荐使用最新版 Chrome、Edge 或 Firefox。
+
+不要只把 index.html 单独拖出文件夹，否则图片和脚本将无法加载。
+
+若本机安全策略限制本地脚本，可在游戏目录运行：
+python -m http.server 8000
+然后访问：http://localhost:8000
