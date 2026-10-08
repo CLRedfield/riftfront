@@ -9,11 +9,17 @@
       this.master = null;
       this.enabled = true;
       this.lastHitAt = 0;
+      this.volume = 0.65;
     }
 
     setEnabled(value) {
       this.enabled = Boolean(value);
-      if (this.master) this.master.gain.value = this.enabled ? 0.16 : 0;
+      if (this.master) this.master.gain.value = this.enabled ? 0.24 * this.volume : 0;
+    }
+
+    setVolume(value) {
+      this.volume = Math.max(0, Math.min(1, Number.isFinite(Number(value)) ? Number(value) : 0.65));
+      this.setEnabled(this.enabled);
     }
 
     ensureContext() {
@@ -23,7 +29,7 @@
       if (!this.context) {
         this.context = new AudioContextClass();
         this.master = this.context.createGain();
-        this.master.gain.value = 0.16;
+        this.master.gain.value = 0.24 * this.volume;
         this.master.connect(this.context.destination);
       }
       if (this.context.state === 'suspended') this.context.resume().catch(() => {});

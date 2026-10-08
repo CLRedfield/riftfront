@@ -87,7 +87,9 @@
       this.running = false;
       this.paused = false;
       this.ended = false;
-      this.speed = Number(options.speed || 1);
+      this.destroyed = false;
+      this.endTimer = null;
+      this.speed = [1, 1.5, 2].includes(Number(options.speed)) ? Number(options.speed) : 1;
       this.mouse = { x: 0, y: 0, inside: false, external: false };
       this.dragPreviewIndex = null;
 
@@ -263,7 +265,7 @@
     }
 
     start() {
-      if (this.running) return;
+      if (this.running || this.destroyed) return;
       this.running = true;
       this.lastFrameAt = performance.now();
       this.animationFrame = requestAnimationFrame(this.boundLoop);
@@ -272,6 +274,9 @@
 
     destroy() {
       this.running = false;
+      this.destroyed = true;
+      if (this.endTimer) clearTimeout(this.endTimer);
+      this.endTimer = null;
       if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
       this.canvas.removeEventListener('pointermove', this.boundPointerMove);
       this.canvas.removeEventListener('pointerleave', this.boundPointerLeave);
@@ -292,6 +297,7 @@
     }
 
     update(dt) {
+      if (this.ended || this.paused || this.destroyed || !Number.isFinite(dt) || dt <= 0) return;
       this.elapsed += dt;
       this.updateStage();
       this.updateEnergy(dt);
@@ -396,7 +402,8 @@
       const ai = this.config.ai || {};
       const affordable = this.enemyHand
         .map((cardId, index) => ({ cardId, index, card: RF.CARDS[cardId] }))
-        .filter((entry) => entry.card && entry.card.cost <= this.enemyEnergy + 0.001);
+        .filter((entry) => entry.card && entry.card.cost <= this.enemyEnergy + 0.001)
+        .filter((entry) => entry.card.type !== 'building' || this.entities.filter((entity) => entity.alive && entity.side === SIDE_ENEMY && entity.isBuilding).length < 3);
 
       if (!affordable.length) {
         this.aiStallTime += 0.7;
@@ -982,7 +989,9 @@
       let index = entity.waypointIndex;
       let waypoint = points[index];
       let guard = 0;
-      while (waypoint && Math.hypot(waypoint.x - entity.x, waypoint.y - entity.y) < Math.max(26, entity.radius + 12) && guard < points.length + 1) {
+      // Pursuit can carry a squad past a waypoint. Resume forward progress instead
+      // of marching backwards to an obsolete point after its target dies.
+      while (waypoint && (Math.hypot(waypoint.x - entity.x, waypoint.y - entity.y) < Math.max(26, entity.radius + 12) || (entity.x - waypoint.x) * direction > 24) && guard < points.length + 1) {
         index += direction;
         waypoint = points[index];
         guard += 1;
@@ -1193,6 +1202,8 @@
     }
 
     createBurst(x, y, color, count = 16) {
+      if (RF.Storage?.get().settings.reducedMotion) count = Math.min(count, 3);
+      count = Math.max(0, Math.min(count, 300 - this.particles.length));
       for (let i = 0; i < count; i += 1) {
         const angle = Math.random() * Math.PI * 2;
         const speed = randomBetween(35, count > 30 ? 150 : 95);
@@ -1232,11 +1243,18 @@
         }
         const playerOutposts = this.forts.playerOutposts.filter((fort) => fort.alive).length;
         const enemyOutposts = this.forts.enemyOutposts.filter((fort) => fort.alive).length;
-        this.finishBattle(playerOutposts >= enemyOutposts, '核心完整度相同，按前哨数量判定');
+        if (playerOutposts !== enemyOutposts) {
+          this.finishBattle(playerOutposts > enemyOutposts, '核心完整度相同，按存活前哨数量判定');
+          return;
+        }
+        const integrity = (forts) => forts.reduce((sum, fort) => sum + Math.max(0, fort.hp) / fort.maxHp, 0);
+        const advantage = integrity(this.forts.playerOutposts) - integrity(this.forts.enemyOutposts);
+        this.finishBattle(advantage > 0.001, advantage > 0.001 ? '时限结束，以前哨完整度优势取胜' : '时限结束，未建立战线优势');
       }
     }
 
     finishBattle(victory, reason) {
+      if (this.ended || this.destroyed) return;
       this.ended = true;
       this.selectedIndex = null;
       const remaining = Math.max(0, this.duration - this.elapsed);
@@ -1253,7 +1271,10 @@
       };
       RF.audio.play(victory ? 'victory' : 'defeat');
       this.emitState(true);
-      setTimeout(() => this.callbacks.onEnd(result), 600);
+      this.endTimer = setTimeout(() => {
+        this.endTimer = null;
+        if (!this.destroyed) this.callbacks.onEnd(result);
+      }, 600);
     }
 
 
@@ -1747,7 +1768,7 @@
     }
 
     selectCard(index, force = false) {
-      if (this.ended || index < 0 || index >= this.hand.length) return false;
+      if (this.ended || this.destroyed || !Number.isInteger(index) || index < 0 || index >= this.hand.length) return false;
       this.selectedIndex = force ? index : (this.selectedIndex === index ? null : index);
       RF.audio.play('select');
       this.emitState(true);
@@ -1785,12 +1806,12 @@
     }
 
     playCardAtIndex(index, x, y) {
-      if (index == null || index < 0 || index >= this.hand.length) return false;
+      if (this.paused || this.ended || this.destroyed || !Number.isInteger(index) || index < 0 || index >= this.hand.length) return false;
       this.selectedIndex = index;
       return this.playSelectedAt(x, y);
     }
     archiveCard(index = this.selectedIndex) {
-      if (this.ended || this.archiveCharges <= 0 || index == null || index < 0 || index >= this.hand.length) return false;
+      if (this.paused || this.ended || this.destroyed || this.archiveCharges <= 0 || !Number.isInteger(index) || index < 0 || index >= this.hand.length) return false;
       const [item] = this.hand.splice(index, 1);
       this.groupDiscards[item.group].push(item.cardId);
       this.archiveCharges -= 1;
@@ -1822,6 +1843,7 @@
     }
 
     playSelectedAt(x, y) {
+      if (this.paused || this.ended || this.destroyed) return false;
       if (this.selectedIndex == null || !this.hand[this.selectedIndex]) return false;
       const item = this.hand[this.selectedIndex];
       const card = RF.CARDS[item.cardId];
@@ -1857,11 +1879,13 @@
       }
       this.emitEvent('cardPlayed', { card, lane, routeName: this.routeName(lane), x, y });
 
-      if (this.mirrorEnabled && card.type === 'unit') {
+      if (this.mirrorEnabled && card.type === 'unit' && this.elapsed >= (this.mirrorReadyAt || 0)) {
+        this.mirrorReadyAt = this.elapsed + 16;
         const mirrorLane = Math.max(0, this.routeCount - 1 - lane);
         const mirrorX = clamp(WIDTH - x, 815, 1120);
         const mirroredY = clamp(HEIGHT - y, FIELD.top + 30, FIELD.bottom - 30);
         const mirrorY = this.findOpenPoint(mirrorX, mirroredY, Number(card.unit?.radius || 14)).y;
+        this.emitEvent('warning', { title: '镜像正在成形', text: `5秒后，${this.routeName(mirrorLane)}将出现${card.name}的短暂镜像。`, hazard: 'mirror' });
         this.schedule(5, () => {
           this.playCardEffect(SIDE_ENEMY, item.cardId, mirrorLane, mirrorX, { source: 'mirror', y: mirrorY });
           this.emitEvent('warning', { title: '镜像复制完成', text: `${card.name}的敌方镜像出现在${this.routeName(mirrorLane)}附近。`, lane: mirrorLane, hazard: 'mirror' });
@@ -1875,6 +1899,7 @@
     }
     validatePlacement(card, lane, x, y) {
       if (!card) return { ok: false, reason: '未识别的战术协议。' };
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, reason: '请选择有效的战场落点。' };
       if (y < FIELD.top || y > FIELD.bottom || x < FIELD.left || x > FIELD.right) return { ok: false, reason: '请在战场内部选择目标。' };
       if (card.type === 'unit' || card.type === 'building') {
         const radius = card.type === 'building' ? Number(card.building?.radius || 22) + 5 : Math.max(11, Number(card.unit?.radius || 12));
@@ -1902,7 +1927,7 @@
     }
 
     togglePause() {
-      if (this.ended) return;
+      if (this.ended || this.destroyed) return;
       this.paused = !this.paused;
       RF.audio.play('click');
       this.emitState(true);

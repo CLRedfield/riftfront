@@ -155,7 +155,7 @@
       this.battleEventLog = [];
       const speed = Number(this.refreshSave().settings.battleSpeed || 1);
       const playerMods = context.mode === 'rogue' ? this.aggregateRogueMods(this.save.rogue) : { startEnergy: this.save.campaign.completed.includes(7) ? 1 : 0 };
-      const battleDeck = context.mode === 'rogue' && this.save.rogue?.deck ? RF.Storage.cloneDeck(this.save.rogue.deck) : RF.Storage.cloneDeck(this.save.deck);
+      const battleDeck = context.mode === 'training' ? RF.Storage.cloneDeck(RF.DEFAULT_DECK) : context.mode === 'rogue' && this.save.rogue?.deck ? RF.Storage.cloneDeck(this.save.rogue.deck) : RF.Storage.cloneDeck(this.save.deck);
       this.root.innerHTML = this.battleTemplate(config);
       const canvas = document.getElementById('battle-canvas');
       this.battle = new RF.BattleEngine(canvas, config, {

@@ -130,5 +130,31 @@
     "building_federation": "assets/source_atlases/building_federation.png",
     "building_swarm": "assets/source_atlases/building_swarm.png",
     "building_mixed": "assets/source_atlases/building_mixed.png"
+  },
+  "runtimeSpriteAtlases": {
+    "fedCore": "assets/sprite_sheets_runtime/fed_core.png",
+    "fedHeavy": "assets/sprite_sheets_runtime/fed_heavy.png",
+    "swarm": "assets/sprite_sheets_runtime/swarm.png",
+    "prism": "assets/sprite_sheets_runtime/prism.png",
+    "wastelandFrost": "assets/sprite_sheets_runtime/wasteland_frost.png",
+    "jungleMagma": "assets/sprite_sheets_runtime/jungle_magma.png",
+    "steelMirror": "assets/sprite_sheets_runtime/steel_mirror_boss.png",
+    "shadow": "assets/sprite_sheets_runtime/shadow.png",
+    "shadowBoss": "assets/sprite_sheets_runtime/shadow_boss.png"
+  },
+  "gptImage2SpriteSources": {
+    "shadow_hounds": "assets/source_sprites_gptimage2/shadow_hounds.png",
+    "shadow_sentinels": "assets/source_sprites_gptimage2/shadow_sentinels.png",
+    "shadow_seers": "assets/source_sprites_gptimage2/shadow_seers.png",
+    "shadow_stalkers": "assets/source_sprites_gptimage2/shadow_stalkers.png",
+    "shadow_lurker": "assets/source_sprites_gptimage2/shadow_lurker.png",
+    "shadow_archon": "assets/source_sprites_gptimage2/shadow_archon.png",
+    "shadow_eye": "assets/source_sprites_gptimage2/shadow_eye.png",
+    "shadow_wraith": "assets/source_sprites_gptimage2/shadow_wraith.png",
+    "boss_eclipse_sovereign": "assets/source_sprites_gptimage2/boss_eclipse_sovereign.png"
+  },
+  "terrainV162": {
+    "bridgeDeck": "assets/map_bg/rift_bridge_deck_v162.png",
+    "obstacleAtlas": "assets/map_bg/terrain_obstacles_v162.png"
   }
 }

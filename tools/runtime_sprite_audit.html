@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>裂界战线｜单位与建筑帧审计</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #050b11; color: #e8f5fb; }
+    header { position: sticky; top: 0; z-index: 5; display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 22px 28px; background: rgba(5, 11, 17, .94); border-bottom: 1px solid rgba(126, 220, 255, .18); backdrop-filter: blur(14px); }
+    h1 { margin: 0 0 5px; font-size: 22px; }
+    p { margin: 0; color: #90a8b7; line-height: 1.55; }
+    .legend { display: flex; gap: 16px; color: #a9c1ce; font-size: 12px; white-space: nowrap; }
+    .legend b { color: #72dcff; }
+    main { padding: 24px 28px 60px; }
+    section + section { margin-top: 36px; }
+    h2 { margin: 0 0 14px; color: #8de7ff; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; }
+    .rows { display: grid; gap: 9px; }
+    .unit { display: grid; grid-template-columns: 210px 1fr; gap: 16px; align-items: center; min-height: 132px; padding: 9px 12px; border-top: 1px solid rgba(255, 255, 255, .075); background: linear-gradient(90deg, rgba(75, 183, 226, .035), transparent 62%); }
+    .unit-meta strong, .unit-meta code { display: block; }
+    .unit-meta code { margin-top: 6px; color: #7794a5; font-size: 11px; }
+    canvas { width: min(100%, 576px); height: auto; border-radius: 10px; background: #0a141e; image-rendering: auto; }
+    .error { color: #ff9d8f; }
+    @media (max-width: 760px) { header { align-items: start; flex-direction: column; } .unit { grid-template-columns: 1fr; } main { padding-inline: 16px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>局内单位与建筑帧审计</h1><p>直接调用游戏的运行时映射、整数裁剪、X 轴转向与建筑四帧资源。</p></div>
+    <div class="legend"><span><b>帧 0</b> 静止</span><span><b>帧 1</b> 移动</span><span><b>帧 2</b> 攻击</span><span><b>帧 3</b> 收势</span></div>
+  </header>
+  <main id="audit"><p>正在按局内规则加载帧……</p></main>
+  <script src="../js/v150_art_patch.js?v=1.6.3a"></script>
+  <script src="../js/v160_visual_patch.js?v=1.6.3a"></script>
+  <script src="runtime_sprite_audit.js?v=1.6.3a"></script>
+</body>
+</html>

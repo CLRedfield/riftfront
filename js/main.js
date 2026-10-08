@@ -126,7 +126,7 @@
     }
 
     handleHandPointerDown(event) {
-      if (!this.battle || event.button !== 0) return;
+      if (!this.battle || this.battle.paused || this.battle.ended || event.button !== 0) return;
       const cardElement = event.target.closest('[data-card-index]');
       if (!cardElement || !this.root.contains(cardElement)) return;
       const index = Number(cardElement.dataset.cardIndex);
@@ -134,7 +134,9 @@
       this.cleanupHandDrag(true, false);
       this.handDrag = {
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         index,
+        uid: this.battle.hand[index]?.uid,
         startX: event.clientX,
         startY: event.clientY,
         lastX: event.clientX,
@@ -149,9 +151,19 @@
     handleHandPointerMove(event) {
       const drag = this.handDrag;
       if (!drag || drag.pointerId !== event.pointerId || !this.battle) return;
+      const liveIndex = this.battle.hand.findIndex((item) => item.uid === drag.uid);
+      if (liveIndex < 0 || this.battle.paused || this.battle.ended) {
+        this.cleanupHandDrag(false);
+        return;
+      }
+      drag.index = liveIndex;
       drag.lastX = event.clientX;
       drag.lastY = event.clientY;
       const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+      if (!drag.moved && drag.pointerType === 'touch' && Math.abs(event.clientX - drag.startX) > 9 && Math.abs(event.clientX - drag.startX) > Math.abs(event.clientY - drag.startY) * 1.3) {
+        this.cleanupHandDrag(true, false);
+        return;
+      }
       if (!drag.moved && distance < 7) return;
       if (!drag.moved) {
         drag.moved = true;
@@ -173,7 +185,10 @@
       event.preventDefault();
       this.updateHandDragVisual(event.clientX, event.clientY);
       const point = drag.canvasPoint;
-      if (point?.inside && this.battle) this.battle.playCardAtIndex(drag.index, point.x, point.y);
+      if (point?.inside && this.battle) {
+        const liveIndex = this.battle.hand.findIndex((item) => item.uid === drag.uid);
+        if (liveIndex >= 0) this.battle.playCardAtIndex(liveIndex, point.x, point.y);
+      }
       this.suppressHandClickUntil = performance.now() + 320;
       this.cleanupHandDrag(true);
     }
@@ -324,6 +339,8 @@
     }
 
     handleKeyDown(event) {
+      if (event.target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.repeat) return;
       if (this.modalRoot.classList.contains('is-open')) {
         if (event.key === 'Escape' && this.modalRoot.dataset.dismissible === 'true') this.closeModal();
         if (event.key === 'Enter' && this.dialogueState) this.advanceDialogue(false);
@@ -1389,6 +1406,7 @@
         RF.Storage.importSave(area.value);
         this.refreshSave();
         RF.audio.setEnabled(this.save.settings.sound);
+        RF.audio.setVolume(this.save.settings.volume);
         document.body.classList.toggle('reduced-motion', Boolean(this.save.settings.reducedMotion));
         this.closeModal();
         this.renderHome();
@@ -1404,6 +1422,8 @@
         RF.Storage.reset();
         this.refreshSave();
         RF.audio.setEnabled(this.save.settings.sound);
+        RF.audio.setVolume(this.save.settings.volume);
+        document.body.classList.toggle('reduced-motion', Boolean(this.save.settings.reducedMotion));
         this.deckDraft = RF.Storage.cloneDeck(this.save.deck);
         this.renderHome();
         this.toast('存档已重置。', 'info');

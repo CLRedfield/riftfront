@@ -119,7 +119,7 @@
       entity.navPathIndex = 0;
       entity.nextRepathAt = 0;
       entity.lastNavGoal = null;
-      const rank = Number(this.mods.cardUpgrades?.[card.id] || 0);
+      const rank = side === SIDE_PLAYER ? Number(this.mods.cardUpgrades?.[card.id] || 0) : 0;
       if (rank > 0) {
         const mul = 1 + 0.16 * rank;
         entity.maxHp *= mul; entity.hp *= mul; entity.damage *= mul; entity.heal *= mul; entity.shield *= mul;
@@ -147,7 +147,7 @@
       entity.pullResist = 0.8;
       entity.lockedTargetId = null;
       entity.firstLockShield = 0;
-      const rank = Number(this.mods.cardUpgrades?.[card.id] || 0);
+      const rank = side === SIDE_PLAYER ? Number(this.mods.cardUpgrades?.[card.id] || 0) : 0;
       if (rank > 0) {
         const mul = 1 + 0.18 * rank;
         entity.maxHp *= mul; entity.hp *= mul; entity.damage *= 1 + 0.15 * rank; entity.shield *= mul;
@@ -239,33 +239,76 @@
     return null;
   };
 
-  function dynamicBlocked(engine, entity, x, y, radius, targetId) {
-    if (entity.phaseMovement) return false;
+  const NAV_CLEARANCE = 0.82;
 
-    // Deployment can place a troop close enough to its own tower or a terrain lip
-    // that its first step still overlaps the blocker. Permit steps that move OUT
-    // of an existing overlap, otherwise the unit can become permanently pinned.
-    const currentMapBlocked = !entity.flying && engine.isPointBlocked(entity.x, entity.y, radius * 0.76);
-    if (!entity.flying && engine.isPointBlocked(x, y, radius * 0.76) && !currentMapBlocked) return true;
+  function navigationRadius(entity, scale = 1) {
+    return Math.max(4, Number(entity.radius || 12) * NAV_CLEARANCE * scale);
+  }
 
-    const overlapsBlocker = (blocker, scale) => {
-      const limit = radius * scale + Number(blocker.radius || 0) + 2;
-      const nextDistance = Math.hypot(x - blocker.x, y - blocker.y);
-      if (nextDistance >= limit) return false;
-      const currentDistance = Math.hypot(entity.x - blocker.x, entity.y - blocker.y);
-      // Already inside the collision shell: an outward step is always legal.
-      return !(currentDistance < limit && nextDistance > currentDistance + 0.05);
+  function makeNavQuery(engine, entity, targetId, defaultRadius = navigationRadius(entity)) {
+    // Terrain, deployed buildings and permanent forts share one collision query.
+    // The active target is excluded so troops can enter their attack range.
+    const blockers = [
+      ...engine.entities.filter((other) => other.alive && other.isBuilding),
+      ...allForts(engine).filter((fort) => fort.alive)
+    ].filter((blocker) => blocker.id !== entity.id && blocker.id !== targetId);
+
+    const startsInsideMapBlocker = !entity.flying && engine.isPointBlocked(entity.x, entity.y, defaultRadius);
+    let mapEscapePoint = null;
+    if (startsInsideMapBlocker) {
+      const ringStep = Math.max(14, defaultRadius * 0.9);
+      for (let ring = 1; ring <= 12 && !mapEscapePoint; ring += 1) {
+        const distance = ring * ringStep;
+        for (let sample = 0; sample < 24; sample += 1) {
+          const angle = sample / 24 * Math.PI * 2;
+          const x = entity.x + Math.cos(angle) * distance;
+          const y = entity.y + Math.sin(angle) * distance;
+          if (!engine.isPointBlocked(x, y, defaultRadius)) {
+            mapEscapePoint = { x, y };
+            break;
+          }
+        }
+      }
+    }
+
+    const blocked = (x, y, radius = defaultRadius) => {
+      if (entity.phaseMovement || entity.flying) return false;
+
+      if (engine.isPointBlocked(x, y, radius)) {
+        if (!startsInsideMapBlocker || !mapEscapePoint) return true;
+        const currentEscapeDistance = Math.hypot(entity.x - mapEscapePoint.x, entity.y - mapEscapePoint.y);
+        const nextEscapeDistance = Math.hypot(x - mapEscapePoint.x, y - mapEscapePoint.y);
+        if (nextEscapeDistance >= currentEscapeDistance - 0.05) return true;
+      }
+
+      for (const blocker of blockers) {
+        const blockerRadius = Number(blocker.radius || 0);
+        const limit = radius + blockerRadius + 2;
+        const nextDistance = Math.hypot(x - blocker.x, y - blocker.y);
+        if (nextDistance >= limit) continue;
+
+        // A unit already intersecting a collision shell may always move outward.
+        const currentDistance = Math.hypot(entity.x - blocker.x, entity.y - blocker.y);
+        if (!(currentDistance < limit && nextDistance > currentDistance + 0.05)) return true;
+      }
+      return false;
     };
 
-    const buildings = engine.entities.filter((other) => other.alive && other.isBuilding && other.id !== targetId && other.id !== entity.id);
-    for (const building of buildings) {
-      if (overlapsBlocker(building, 0.72)) return true;
-    }
-    for (const fort of allForts(engine)) {
-      if (!fort.alive || fort.id === targetId) continue;
-      if (overlapsBlocker(fort, 0.7)) return true;
-    }
-    return false;
+    const lineBlocked = (x1, y1, x2, y2, radius = defaultRadius) => {
+      const distance = Math.hypot(x2 - x1, y2 - y1);
+      const steps = Math.max(1, Math.ceil(distance / 18));
+      for (let i = 1; i <= steps; i += 1) {
+        const t = i / steps;
+        if (blocked(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, radius)) return true;
+      }
+      return false;
+    };
+
+    return { blocked, lineBlocked, defaultRadius };
+  }
+
+  function dynamicBlocked(engine, entity, x, y, radius, targetId) {
+    return makeNavQuery(engine, entity, targetId, radius).blocked(x, y, radius);
   }
 
   class MinHeap {
@@ -293,7 +336,8 @@
     get length() { return this.a.length; }
   }
 
-  function navPath(engine, entity, goalX, goalY, targetId) {
+  function navPath(engine, entity, goalX, goalY, targetId, query = null) {
+    const navQuery = query || makeNavQuery(engine, entity, targetId);
     const step = 32;
     const cols = Math.floor((FIELD.right - FIELD.left) / step) + 1;
     const rows = Math.floor((FIELD.bottom - FIELD.top) / step) + 1;
@@ -322,10 +366,10 @@
         const gx = cur.gx + dx, gy = cur.gy + dy;
         if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) continue;
         const world = toWorld(gx, gy);
-        if (dynamicBlocked(engine, entity, world.x, world.y, entity.radius, targetId) && Math.hypot(gx-goal.gx, gy-goal.gy) > 1) continue;
+        if (navQuery.blocked(world.x, world.y) && Math.hypot(gx-goal.gx, gy-goal.gy) > 1) continue;
         if (dx && dy) {
           const w1 = toWorld(cur.gx + dx, cur.gy), w2 = toWorld(cur.gx, cur.gy + dy);
-          if (dynamicBlocked(engine, entity, w1.x, w1.y, entity.radius * 0.7, targetId) || dynamicBlocked(engine, entity, w2.x, w2.y, entity.radius * 0.7, targetId)) continue;
+          if (navQuery.blocked(w1.x, w1.y, navQuery.defaultRadius * 0.86) || navQuery.blocked(w2.x, w2.y, navQuery.defaultRadius * 0.86)) continue;
         }
         const nk = key(gx, gy);
         const ng = baseG + cost;
@@ -352,7 +396,8 @@
     return path;
   }
 
-  function directStep(engine, entity, targetX, targetY, dt, speedMul, targetId) {
+  function directStep(engine, entity, targetX, targetY, dt, speedMul, targetId, query = null) {
+    const navQuery = query || makeNavQuery(engine, entity, targetId);
     const dx = targetX - entity.x, dy = targetY - entity.y;
     const distance = Math.hypot(dx, dy);
     if (distance < 0.5) return;
@@ -387,7 +432,7 @@
       const angle = base + offset;
       const nx = clamp(entity.x + Math.cos(angle) * step, FIELD.left + entity.radius + 2, FIELD.right - entity.radius - 2);
       const ny = clamp(entity.y + Math.sin(angle) * step, FIELD.top + entity.radius + 2, FIELD.bottom - entity.radius - 2);
-      if (!entity.flying && dynamicBlocked(engine, entity, nx, ny, entity.radius * 0.82, targetId)) continue;
+      if (!entity.flying && navQuery.blocked(nx, ny)) continue;
       const score = Math.hypot(targetX - nx, targetY - ny) + Math.abs(offset) * 4;
       if (!best || score < best.score) best = { x:nx,y:ny,angle,score };
     }
@@ -399,15 +444,16 @@
   proto.moveEntityToward = function moveEntityTowardV140(entity, targetX, targetY, dt, speedMul) {
     const targetId = entity.lockedTargetId || null;
     if (entity.flying) { directStep(this, entity, targetX, targetY, dt, speedMul, targetId); return; }
-    const directBlocked = entity.phaseMovement ? false : (this.isLineBlocked(entity.x, entity.y, targetX, targetY, Math.min(8, entity.radius * 0.55)) || dynamicBlocked(this, entity, targetX, targetY, entity.radius * 0.55, targetId));
+    const query = makeNavQuery(this, entity, targetId);
+    const directBlocked = entity.phaseMovement ? false : query.lineBlocked(entity.x, entity.y, targetX, targetY);
     const goalMoved = !entity.lastNavGoal || Math.hypot(entity.lastNavGoal.x - targetX, entity.lastNavGoal.y - targetY) > 50 || entity.lastNavGoal.targetId !== targetId;
     if (!directBlocked) {
       entity.navPath = null; entity.navPathIndex = 0; entity.lastNavGoal = { x:targetX,y:targetY,targetId };
-      directStep(this, entity, targetX, targetY, dt, speedMul, targetId);
+      directStep(this, entity, targetX, targetY, dt, speedMul, targetId, query);
       return;
     }
     if (!entity.navPath || goalMoved || this.elapsed >= Number(entity.nextRepathAt || 0)) {
-      entity.navPath = navPath(this, entity, targetX, targetY, targetId);
+      entity.navPath = navPath(this, entity, targetX, targetY, targetId, query);
       entity.navPathIndex = 0;
       entity.nextRepathAt = this.elapsed + 0.52 + Math.random() * 0.24;
       entity.lastNavGoal = { x:targetX,y:targetY,targetId };
@@ -415,7 +461,7 @@
     const path = entity.navPath || [];
     while (entity.navPathIndex < path.length - 1 && Math.hypot(path[entity.navPathIndex].x - entity.x, path[entity.navPathIndex].y - entity.y) < Math.max(20, entity.radius + 8)) entity.navPathIndex += 1;
     const waypoint = path[entity.navPathIndex] || { x:targetX,y:targetY };
-    directStep(this, entity, waypoint.x, waypoint.y, dt, speedMul, targetId);
+    directStep(this, entity, waypoint.x, waypoint.y, dt, speedMul, targetId, query);
   };
 
   proto.updateEntities = function updateEntitiesV140(dt) {
@@ -469,7 +515,7 @@
       } else if (!entity.isBuilding) {
         if (distance < minRange) {
           this.moveEntityToward(entity, entity.x - (target.x - entity.x), entity.y - (target.y - entity.y), dt, speedMul * 0.68);
-        } else if (!target.kind && distance <= Number(entity.leashRange || entity.pursuitRange || 360)) {
+        } else if (distance <= Number(entity.leashRange || entity.pursuitRange || 360)) {
           this.moveEntityToward(entity, target.x, target.y, dt, speedMul);
         } else {
           this.advanceEntity(entity, dt, speedMul);
@@ -686,8 +732,17 @@
         const duration=Number(boss.powerDuration||7);this.entities.filter((entity)=>entity.alive&&entity.side===SIDE_ENEMY).forEach((entity)=>{entity.stealthUntil=Math.max(Number(entity.stealthUntil||0),this.elapsed+duration);entity.rallyUntil=Math.max(Number(entity.rallyUntil||0),this.elapsed+duration*.7);});
         this.entities.filter((entity)=>entity.alive&&entity.side===SIDE_PLAYER).forEach((entity)=>{entity.lockedTargetId=null;});this.createBurst(bossEntity.x,bossEntity.y,'#d27cff',42);this.emitEvent('warning',{title:boss.powerName||'黑日幕墙',text:'敌军进入隐匿并清除我方现有锁定。',hazard:'shadow'});
       } else if (power==='nightmareGate') {
-        for(let lane=0;lane<this.routeCount;lane+=1){const x=randomBetween(900,1040),y=this.routePointAtX(lane,x).y;this.playCardEffect(SIDE_ENEMY,'shadow_gate',lane,x,{source:'bossPower',y});}
-        this.emitEvent('warning',{title:boss.powerName||'万门齐开',text:'所有通路同时生成噩梦裂隙门。',hazard:'shadow'});
+        // One gate per lane leaves a counterplay window instead of stacking spawn factories.
+        for (let lane=0; lane<this.routeCount; lane+=1) {
+          if (this.entities.some(entity=>entity.alive&&entity.side===SIDE_ENEMY&&entity.cardId==='shadow_gate'&&entity.lane===lane)) continue;
+          const x=randomBetween(900,1040), y=this.routePointAtX(lane,x).y;
+          this.hazardVisuals.push({id:`gate-${this.uid++}`,type:'orbitalTarget',lane,x,y,radius:50,warningUntil:this.elapsed+2.4,activeUntil:this.elapsed+2.8});
+          this.schedule(2.4,()=>{
+            if (!bossEntity.alive || this.entities.some(entity=>entity.alive&&entity.side===SIDE_ENEMY&&entity.cardId==='shadow_gate'&&entity.lane===lane)) return;
+            this.playCardEffect(SIDE_ENEMY,'shadow_gate',lane,x,{source:'bossPower',y});
+          });
+        }
+        this.emitEvent('warning',{title:boss.powerName||'万门齐开',text:'裂隙门即将出现，每条通路最多一座。优先拆门阻断增援。',hazard:'shadow'});
       } else if (power==='eclipseDominion') {
         const phase=cycle%4;
         if(phase===1){const lane=this.resolveBossLane('stronger');const x=randomBetween(570,710),y=this.routePointAtX(lane,x).y;this.playCardEffect(SIDE_ENEMY,'shadow_pylon',lane,x,{source:'bossPower',y});}

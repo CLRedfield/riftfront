@@ -3,15 +3,35 @@
 
   const RF = window.RF = window.RF || {};
   RF.VERSION = '1.5.0';
+  const patchBaseUrl = (() => {
+    try { return new URL('../', document.currentScript?.src || document.baseURI); }
+    catch (error) { return null; }
+  })();
 
-  const SHEETS = {
+  const SOURCE_SHEETS = {
     fedCore: 'assets/sprite_sheets/fed_core.png',
     fedHeavy: 'assets/sprite_sheets/fed_heavy.png',
     swarm: 'assets/sprite_sheets/swarm.png',
     prism: 'assets/sprite_sheets/prism.png',
     wastelandFrost: 'assets/sprite_sheets/wasteland_frost.png',
     jungleMagma: 'assets/sprite_sheets/jungle_magma.png',
-    steelMirror: 'assets/sprite_sheets/steel_mirror_boss.png'
+    steelMirror: 'assets/sprite_sheets/steel_mirror_boss.png',
+    shadow: 'assets/source_sprites_gptimage2/shadow_hounds.png',
+    shadowBoss: 'assets/source_sprites_gptimage2/boss_eclipse_sovereign.png'
+  };
+
+  // 旧图集由 tools/build_runtime_sprite_atlases.cjs 规范化；GPT Image 2 的影渊
+  // 2×2 原图由 tools/build_consistent_animations.cjs 重排。局内统一读取 4×8 结果。
+  const SHEETS = {
+    fedCore: 'assets/sprite_sheets_runtime/fed_core.png',
+    fedHeavy: 'assets/sprite_sheets_runtime/fed_heavy.png',
+    swarm: 'assets/sprite_sheets_runtime/swarm.png',
+    prism: 'assets/sprite_sheets_runtime/prism.png',
+    wastelandFrost: 'assets/sprite_sheets_runtime/wasteland_frost.png',
+    jungleMagma: 'assets/sprite_sheets_runtime/jungle_magma.png',
+    steelMirror: 'assets/sprite_sheets_runtime/steel_mirror_boss.png',
+    shadow: 'assets/sprite_sheets_runtime/shadow.png',
+    shadowBoss: 'assets/sprite_sheets_runtime/shadow_boss.png'
   };
 
   const MAP_ATLASES = {
@@ -38,7 +58,10 @@
     magma_imp: ['jungleMagma', 4], obsidian_guard: ['jungleMagma', 5], fire_bug: ['jungleMagma', 6], lava_carrier: ['jungleMagma', 7],
     furnace_priest: ['steelMirror', 0], boss_magma_colossus: ['steelMirror', 1], steel_drone: ['steelMirror', 2], shield_bot: ['steelMirror', 3],
     gunwalker: ['steelMirror', 4], boss_hive_mind: ['steelMirror', 5], mirror_sentry: ['steelMirror', 6], mirror_knight: ['steelMirror', 7], boss_core_avatar: ['steelMirror', 7],
-    treasure_clone_fleet: ['fedCore', 5], treasure_omega_titan: ['fedHeavy', 5]
+    treasure_clone_fleet: ['fedCore', 5], treasure_omega_titan: ['fedHeavy', 5],
+    shadow_hounds: ['shadow', 0], shadow_sentinels: ['shadow', 1], shadow_seers: ['shadow', 2], shadow_stalkers: ['shadow', 3],
+    shadow_lurker: ['shadow', 4], shadow_archon: ['shadow', 5], shadow_eye: ['shadow', 6], shadow_wraith: ['shadow', 7],
+    boss_eclipse_sovereign: ['shadowBoss', 0]
   };
 
   const spriteAliases = {
@@ -63,40 +86,46 @@
   const imageCache = new Map();
   function getImage(src) {
     if (!src) return null;
-    if (!imageCache.has(src)) {
+    const resolvedSrc = patchBaseUrl ? new URL(src, patchBaseUrl).href : src;
+    if (!imageCache.has(resolvedSrc)) {
       const img = new Image();
-      img.src = src;
-      imageCache.set(src, img);
+      img.src = resolvedSrc;
+      imageCache.set(resolvedSrc, img);
     }
-    return imageCache.get(src);
+    return imageCache.get(resolvedSrc);
   }
   Object.values(SHEETS).forEach(getImage);
   Object.values(MAP_ATLASES).forEach(getImage);
 
-  // 图集宽高不是 4 / 8 的整数倍（887 × 1774）。直接用小数源矩形时，
-  // 浏览器会在缩放时采样相邻行，窄屏和高 DPI 下尤其容易出现上下串帧。
-  // 先按四舍五入后的整数边界提取为独立离屏帧，彻底隔离相邻单位。
+  // 预构建图集尺寸为 888 × 1776，每帧严格为 222 × 222；运行时仍用整数边界
+  // 提取到独立 canvas，避免缩放时从相邻帧采样颜色。
   const isolatedFrames = new Map();
-  function getIsolatedFrame(sheetKey, image, frame, row) {
-    const safeFrame = Math.max(0, Math.min(3, Number(frame) || 0));
-    const safeRow = Math.max(0, Math.min(7, Number(row) || 0));
-    const key = `${sheetKey}:${safeRow}:${safeFrame}:${image.naturalWidth}x${image.naturalHeight}`;
-    if (isolatedFrames.has(key)) return isolatedFrames.get(key);
+  const ATLAS_COLUMNS = 4;
+  const ATLAS_ROWS = 8;
 
-    const sx = Math.round(safeFrame * image.naturalWidth / 4);
-    const ex = Math.round((safeFrame + 1) * image.naturalWidth / 4);
-    const sy = Math.round(safeRow * image.naturalHeight / 8);
-    const ey = Math.round((safeRow + 1) * image.naturalHeight / 8);
-    const frameCanvas = document.createElement('canvas');
-    frameCanvas.width = Math.max(1, ex - sx);
-    frameCanvas.height = Math.max(1, ey - sy);
-    const frameCtx = frameCanvas.getContext('2d');
-    frameCtx.imageSmoothingEnabled = true;
-    frameCtx.imageSmoothingQuality = 'high';
-    frameCtx.clearRect(0, 0, frameCanvas.width, frameCanvas.height);
-    frameCtx.drawImage(image, sx, sy, frameCanvas.width, frameCanvas.height, 0, 0, frameCanvas.width, frameCanvas.height);
-    isolatedFrames.set(key, frameCanvas);
-    return frameCanvas;
+  function getFrameBounds(image, frame, row) {
+    const safeFrame = Math.max(0, Math.min(ATLAS_COLUMNS - 1, Math.trunc(Number(frame) || 0)));
+    const safeRow = Math.max(0, Math.min(ATLAS_ROWS - 1, Math.trunc(Number(row) || 0)));
+    const sx = Math.round(safeFrame * image.naturalWidth / ATLAS_COLUMNS);
+    const ex = Math.round((safeFrame + 1) * image.naturalWidth / ATLAS_COLUMNS);
+    const sy = Math.round(safeRow * image.naturalHeight / ATLAS_ROWS);
+    const ey = Math.round((safeRow + 1) * image.naturalHeight / ATLAS_ROWS);
+    return { frame: safeFrame, row: safeRow, sx, sy, sw: Math.max(1, ex - sx), sh: Math.max(1, ey - sy) };
+  }
+
+  function getIsolatedFrame(sheetKey, image, frame, row) {
+    const bounds = getFrameBounds(image, frame, row);
+    const key = `${sheetKey}:${bounds.row}:${bounds.frame}:${image.naturalWidth}x${image.naturalHeight}`;
+    if (isolatedFrames.has(key)) return isolatedFrames.get(key);
+    const output = document.createElement('canvas');
+    output.width = bounds.sw;
+    output.height = bounds.sh;
+    const ctx = output.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(image, bounds.sx, bounds.sy, bounds.sw, bounds.sh, 0, 0, bounds.sw, bounds.sh);
+    isolatedFrames.set(key, output);
+    return output;
   }
 
   function getSpriteConfig(entity) {
@@ -106,6 +135,20 @@
     if (entity.sprite && spriteAliases[entity.sprite]) return spriteAliases[entity.sprite];
     return null;
   }
+
+  // 诊断页直接调用这一接口，确保预览和局内使用完全相同的资源映射、
+  // 整数裁剪边界以及离屏帧缓存，避免“原图正常、运行时错位”无法复现。
+  RF.UNIT_SPRITE_RUNTIME = Object.freeze({
+    columns: ATLAS_COLUMNS,
+    rows: ATLAS_ROWS,
+    sources: Object.freeze({ ...SOURCE_SHEETS }),
+    sheets: Object.freeze({ ...SHEETS }),
+    sprites: Object.freeze({ ...spriteMap }),
+    aliases: Object.freeze({ ...spriteAliases }),
+    getFrameBounds,
+    getIsolatedFrame,
+    getSpriteConfig
+  });
 
   function drawGlowBurst(ctx, color, x, y, radius) {
     ctx.save();
@@ -136,15 +179,15 @@
     ctx.fillStyle = territory;
     ctx.fillRect(0, 0, width, height);
 
-    // 低对比战术网格和中央交战区，不遮挡底图细节。
-    ctx.globalAlpha = .16;
-    ctx.strokeStyle = '#b9ddeb';
-    ctx.lineWidth = 1;
+    // 用稀疏测绘点代替贯穿全图的网格线，避免生成底图被粗糙线稿切碎。
+    ctx.globalAlpha = .13;
+    ctx.fillStyle = '#b9ddeb';
     for (let x = 40; x < width; x += 80) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
-    }
-    for (let y = 40; y < height; y += 80) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+      for (let y = 40; y < height; y += 80) {
+        ctx.beginPath();
+        ctx.arc(x, y, (x + y) % 160 === 0 ? 1.25 : .75, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -154,10 +197,8 @@
     midBand.addColorStop(1, 'rgba(120, 200, 229, 0)');
     ctx.fillStyle = midBand;
     ctx.fillRect(540, 0, 200, height);
-    ctx.strokeStyle = 'rgba(192, 232, 245, .13)';
-    ctx.setLineDash([6, 12]);
-    ctx.beginPath(); ctx.moveTo(640, 18); ctx.lineTo(640, height - 18); ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(192, 232, 245, .08)';
+    ctx.fillRect(639.5, 26, 1, height - 52);
 
     // 慢速扫描带为静态地图增加生命感。
     const scanX = ((engine.elapsed * 34) % (width + 260)) - 130;
